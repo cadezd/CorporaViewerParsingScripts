@@ -1,12 +1,91 @@
 import argparse
-import os
 import re
 import shutil
 
 import fitz
 
 
-def create_thumbnails(source, destination, corpus):
+import subprocess
+import os
+
+def optimize_pdf(input_file, output_file, quality='ebook', ghostscript_path='gs'):
+    quality_settings = {
+        'screen': '/screen',     # lowest quality
+        'ebook': '/ebook',       # good quality
+        'printer': '/printer',   # high quality
+        'prepress': '/prepress'  # highest quality
+    }
+
+    temp_output = output_file + ".tmp.pdf"
+
+    # Ghostscript for compression and font embedding
+    gs_command = [
+        ghostscript_path,  # Ghostscript command; ensure it's in your PATH
+        '-sDEVICE=pdfwrite',
+        '-dCompatibilityLevel=1.4',
+        f'-dPDFSETTINGS={quality_settings.get(quality, "/ebook")}',
+        '-dEmbedAllFonts=false',
+        '-dAutoFilterColorImages=false',
+        '-dColorImageFilter=/DCTEncode',
+        '-dAutoFilterGrayImages=false',
+        '-dGrayImageFilter=/DCTEncode',
+        '-dMonoImageFilter=/CCITTFaxEncode',
+        '-dSubsetFonts=true',
+        '-dCompressFonts=true',
+        '-dFastWebView=false',
+        '-dDetectDuplicateImages=true',
+        '-dColorImageDownsampleType=/Bicubic',
+        '-dNOPAUSE',
+        '-dQUIET',
+        '-dBATCH',
+        f'-sOutputFile={temp_output}',
+        input_file
+    ]
+
+    print("🔧 Compressing and embedding fonts...")
+    try:
+        subprocess.run(gs_command, check=True)
+    except subprocess.CalledProcessError as e:
+        print("❌ Ghostscript compression failed:", e)
+        return
+
+    # qpdf for linearization (fast web view)
+    qpdf_command = [
+        'qpdf',
+        '--linearize',
+        temp_output,
+        output_file
+    ]
+
+    print("📦 Linearizing PDF for fast web view...")
+    try:
+        subprocess.run(qpdf_command, check=True)
+        print(f"✅ Optimization successful: {output_file}")
+    except subprocess.CalledProcessError as e:
+        print("❌ Linearization failed:", e)
+    finally:
+        # Clean up temporary file
+        if os.path.exists(temp_output):
+            os.remove(temp_output)
+
+
+
+
+def optimize_pdfs(input_file, output_file, quality="ebook", ghostscript_path='gs'):
+    print("Optimizing PDF files in directory:", input_file)
+
+    for file in os.listdir(input_file):
+        if not file.lower().endswith(".pdf"):
+            continue
+
+        path = os.path.join(input_file, file)
+
+        optimized_file_path = os.path.join(output_file, file)
+        optimize_pdf(path, optimized_file_path, quality=quality, ghostscript_path=ghostscript_path)
+
+
+
+def create_thumbnails(source, destination):
     print(f"Creating thumbnails for files in directory:", source)
 
     for file in os.listdir(source):
@@ -15,33 +94,15 @@ def create_thumbnails(source, destination, corpus):
 
         path = os.path.join(source, file)
 
-        thumbnails_name = ""
-        if corpus == 'dzk':
-            try:
-                # validate file name format
-                thumbnails_name = generate_dzk_file(file[:-4])  # Remove extension for processing
-            except ValueError as e:
-                print(f"Error occurred while generating thumbnail name for file '{file}':", e)
-                continue
-        elif corpus == 'yuparl':
-            try:
-                # validate file name format
-                thumbnails_name = generate_yuparl_file(file[:-4])  # Remove extension for processing
-            except ValueError as e:
-                print(f"Error occurred while generating thumbnail name for file '{file}':", e)
-                continue
-        else:
-            raise NotImplementedError(f"Thumbnail generation for corpus '{corpus}' is not implemented.")
-
         # get first page of pdf
         pdf_document = fitz.open(path)
         first_page = pdf_document[0]
 
         # generate thumbnail
         image = first_page.get_pixmap()
-        image.save(os.path.join(destination, f"{thumbnails_name}.png"))
+        image.save(os.path.join(destination, f"{file[:-4]}.png"))  # Save as PNG, removing .pdf extension
 
-        print(f"Created thumbnail for '{file}'")
+        print(f"✅ Created thumbnail for '{file}'")
 
 
 def generate_dzk_file(old_name):
@@ -118,34 +179,34 @@ def rename_files(source, destination, corpus):
             try:
                 new_file_name = generate_dzk_file(file[:-4])  # Remove .pdf extension for processing
             except ValueError as e:
-                print(f"Error occurred while renaming file '{file}':", e)
+                print(f"❌ Error occurred while renaming file '{file}':", e)
                 continue
 
             try:
                 new_path = os.path.join(destination, f"{new_file_name}.{file_extension}")
                 shutil.copy(path, new_path)
             except Exception as e:
-                print(f"Error occurred while copying file '{file}' to '{new_path}':", e)
+                print(f"❌ Error occurred while copying file '{file}' to '{new_path}':", e)
                 continue
 
         elif corpus == 'yuparl':
             try:
                 new_file_name = generate_yuparl_file(file[:-4])  # Remove extension for processing
             except ValueError as e:
-                print(f"Error occurred while renaming file '{file}':", e)
+                print(f"❌ Error occurred while renaming file '{file}':", e)
                 continue
 
             try:
                 new_path = os.path.join(destination, f"{new_file_name}.{file_extension}")
                 shutil.copy(path, new_path)
             except Exception as e:
-                print(f"Error occurred while copying file '{file}' to '{new_path}':", e)
+                print(f"❌ Error occurred while copying file '{file}' to '{new_path}':", e)
                 continue
 
         else:
             raise NotImplementedError(f"Renaming for corpus '{corpus}' is not implemented.")
 
-        print(f"Renamed '{file}' to '{new_file_name}.{file_extension}'")
+        print(f"✅ Renamed '{file}' to '{new_file_name}.{file_extension}'")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -153,48 +214,97 @@ def main():
         description='This program is used to prepare PDF and thumbnail data for ParlaVis.'
     )
 
-    # Adding flags
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest='command', required=True, help='Subcommand to run')
+
+    # -------------------------------
+    # Subcommand: rename
+    # -------------------------------
+    rename_parser = subparsers.add_parser('rename', help='Rename files according to ParlaVis convention')
+    rename_parser.add_argument(
         '-c', '--corpus',
         type=str,
         required=True,
         help='Corpus to prepare (e.g., dzk, yuparl, ...)',
-        default='dzk',
         choices=['dzk', 'yuparl']  # Add other corpora here
     )
-
-    parser.add_argument(
+    rename_parser.add_argument(
         '-s', '--source',
         type=str,
         required=True,
         help='Source directory containing raw data'
     )
-
-    parser.add_argument(
+    rename_parser.add_argument(
         '-d', '--destination',
         type=str,
         required=True,
-        help='Destination directory for prepared data'
+        help='Destination directory for renamed data'
     )
 
-    parser.add_argument(
-        '-p', '--process',
+    # -------------------------------
+    # Subcommand: thumbnail
+    # -------------------------------
+    thumb_parser = subparsers.add_parser(
+        'thumbnail',
+        help='Generate thumbnails for the first page of each PDF and save them under the same name with .png extension'
+    )
+    thumb_parser.add_argument(
+        '-s', '--source',
         type=str,
         required=True,
-        help='Process to perform (e.g., rename, thumbnail)',
-        choices=['rename', 'thumbnail']
+        help='Source directory containing PDF files'
+    )
+    thumb_parser.add_argument(
+        '-d', '--destination',
+        type=str,
+        required=True,
+        help='Destination directory for thumbnails'
+    )
+
+    # -------------------------------
+    # Subcommand: optimize
+    # -------------------------------
+    optimize_parser = subparsers.add_parser('optimize', help='Optimize PDF files for web use')
+    optimize_parser.add_argument(
+        '-s', '--source',
+        type=str,
+        required=True,
+        help='Source directory containing PDF files'
+    )
+    optimize_parser.add_argument(
+        '-d', '--destination',
+        type=str,
+        required=True,
+        help='Destination directory for optimized PDFs'
+    )
+    optimize_parser.add_argument(
+        '-q', '--quality',
+        type=str,
+        required=False,
+        help='Quality of optimized PDFs (screen, ebook, printer, prepress)',
+        default='ebook',
+        choices=['screen', 'ebook', 'printer', 'prepress']
+    )
+    optimize_parser.add_argument(
+        "-g", "--ghostscript-path",
+        type=str,
+        required=False,
+        help="Path to the Ghostscript executable (if not in system PATH)",
+        default="gs"
     )
 
     args = parser.parse_args()
 
-    # Add other processes as needed
-    switcher = {
-        'rename': rename_files,
-        'thumbnail': create_thumbnails
-    }
+    # Execute the appropriate function based on the subcommand
+    match args.command:
+        case 'rename':
+            rename_files(args.source, args.destination, args.corpus)
+        case 'thumbnail':
+            create_thumbnails(args.source, args.destination)
+        case 'optimize':
+            optimize_pdfs(args.source, args.destination, quality=args.quality, ghostscript_path=rf"{args.ghostscript_path}")
+        case _:
+            raise NotImplementedError(f"Command '{args.command}' is not implemented.")
 
-    # Execute the selected process
-    switcher.get(args.process)(args.source, args.destination, args.corpus)
 
 
 if __name__ == '__main__':
