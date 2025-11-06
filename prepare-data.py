@@ -3,6 +3,7 @@ import re
 import shutil
 
 import fitz
+from pathlib import Path
 
 
 import subprocess
@@ -106,7 +107,7 @@ def create_thumbnails(source, destination):
 
 
 def generate_dzk_file(old_name):
-    old_name_format = r'DezelniZborKranjski-(\d{8})-(\d{1,2})-(\d{1,2})(p(\d+))?'
+    old_name_format = r'DezelniZborKranjski(-\d{8})(-\d{1,2})(p(\d+))?(-\d{1,2})?'
     match = re.match(old_name_format, old_name)
     if not match:
         raise ValueError(f"File name '{old_name}' does not match expected format for dzk.")
@@ -118,7 +119,7 @@ def generate_dzk_file(old_name):
     day = date[6:]
 
     # volume
-    volume = old_name.split("-")[2]
+    volume = str(old_name.split("-")[2]).replace("p", "-")
     # and number
     number = old_name.split("-")[3]
 
@@ -128,7 +129,7 @@ def generate_dzk_file(old_name):
 
 
 def generate_yuparl_file(old_name):
-    old_name_format = r'(\d{8})-(\w+)-(\d{1,})?(\w+(\d+))?'
+    old_name_format = r'(\d{8,10})-(\w+)-(\d{1,})?(\w+(\d+))?'
     match = re.match(old_name_format, old_name)
     if not match:
         raise ValueError(f"File name '{old_name}' does not match expected format for yuparl.")
@@ -143,10 +144,15 @@ def generate_yuparl_file(old_name):
 
     date_part, session_type_part, number_part = old_name.split("-")
 
+
     year = date_part[:4]
     month = date_part[4:6]
     day = date_part[6:8]
     date = f"{year}-{month}-{day}"
+
+    if len(date_part) == 10:
+        day2 = date_part[8:10]
+        date = f"{year}-{month}-{day}-{day2}"
 
     session_type = session_type_dict.get(session_type_part)
     if session_type is None:
@@ -163,50 +169,42 @@ def generate_yuparl_file(old_name):
     return f"yu1Parl_{date}_{session_type}_{number}"
 
 
+# python
 def rename_files(source, destination, corpus):
-    print(f"Renaming {corpus} files in directory:", source)
+    print(f"Renaming {corpus} files in directory: {source}")
+    src = Path(source)
+    dst = Path(destination)
 
-    for file in os.listdir(source):
-        # Skip non-PDF and non-PNG files
-        if not  file.lower().endswith((".pdf", ".png")):
+    for path in src.rglob('*'):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in ('.pdf'):
             continue
 
-        file_extension = file.split('.')[-1]
-        path = os.path.join(source, file)
+        try:
+            base_name = path.stem  # file name without extension
+            if corpus == 'dzk':
+                new_file_name = generate_dzk_file(base_name)
+            elif corpus == 'yuparl':
+                new_file_name = generate_yuparl_file(base_name)
+            else:
+                raise NotImplementedError(f"Renaming for corpus '{corpus}' is not implemented.")
+        except ValueError as e:
+            print(f"❌ Error occurred while renaming file '{path}':", e)
+            continue
+        except NotImplementedError as e:
+            print(f"❌ {e}")
+            return
 
-        new_file_name, new_path = "", ""
-        if corpus == 'dzk':
-            try:
-                new_file_name = generate_dzk_file(file[:-4])  # Remove .pdf extension for processing
-            except ValueError as e:
-                print(f"❌ Error occurred while renaming file '{file}':", e)
-                continue
+        new_path = dst / f"{new_file_name}{path.suffix}"
+        try:
+            shutil.copy2(path, new_path)
+        except Exception as e:
+            print(f"❌ Error occurred while copying file '{path}' to '{new_path}':", e)
+            continue
 
-            try:
-                new_path = os.path.join(destination, f"{new_file_name}.{file_extension}")
-                shutil.copy(path, new_path)
-            except Exception as e:
-                print(f"❌ Error occurred while copying file '{file}' to '{new_path}':", e)
-                continue
+        print(f"✅ Renamed '{path}' to '{new_path.name}'")
 
-        elif corpus == 'yuparl':
-            try:
-                new_file_name = generate_yuparl_file(file[:-4])  # Remove extension for processing
-            except ValueError as e:
-                print(f"❌ Error occurred while renaming file '{file}':", e)
-                continue
-
-            try:
-                new_path = os.path.join(destination, f"{new_file_name}.{file_extension}")
-                shutil.copy(path, new_path)
-            except Exception as e:
-                print(f"❌ Error occurred while copying file '{file}' to '{new_path}':", e)
-                continue
-
-        else:
-            raise NotImplementedError(f"Renaming for corpus '{corpus}' is not implemented.")
-
-        print(f"✅ Renamed '{file}' to '{new_file_name}.{file_extension}'")
 
 def main():
     parser = argparse.ArgumentParser(
