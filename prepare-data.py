@@ -9,6 +9,7 @@ import subprocess
 import os
 
 import parser_dzk
+import parser_yuparl
 
 
 def optimize_pdf(input_file, output_file, quality='ebook', ghostscript_path='gs'):
@@ -337,7 +338,9 @@ def main():
         case 'parse':
             if args.corpus == 'dzk':
                 parser_dzk.parse(args.source, args.destination, args.from_index, args.to_index)
-            else :
+            elif args.corpus == 'yuparl':
+                parser_yuparl.parse(args.source, args.destination, args.from_index, args.to_index)
+            else:
                 raise NotImplementedError(f"Parsing for corpus '{args.corpus}' is not implemented.")
         case _:
             raise NotImplementedError(f"Command '{args.command}' is not implemented.")
