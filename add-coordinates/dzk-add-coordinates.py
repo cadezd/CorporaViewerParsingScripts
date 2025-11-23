@@ -32,7 +32,7 @@ WORD_TAG = "{" + TEI + "}w"
 PUNCTUATION_TAG = "{" + TEI + "}pc"
 
 # Characters that are 100% not in the xml files ()
-CHARACTERS_TO_REMOVE: set[str] = {'@', '#', '$', '^', '&', '*', '<', '>'}
+CHARACTERS_TO_REMOVE: set[str] = {'@', '#', '$', '^', '&', '*', '<', '>', '­', '-'}
 
 # Additional equalities for Edlib to improve alignment
 ADDIDIONAL_EQUALITIES: list[tuple[str, str]] = [
@@ -289,7 +289,7 @@ def parse_words(pdf_chars: list[dict], xml_sentence: ET.Element):
         BUFFER: int = 2
 
         while similarity_prev < similarity_curr < 1.0:
-            search_area_start = best_match_end
+            search_area_start = search_from
             search_area_end = search_area_start + len(target) + BUFFER
             search_area: str = sequence[search_area_start:search_area_end]
 
@@ -308,9 +308,11 @@ def parse_words(pdf_chars: list[dict], xml_sentence: ET.Element):
         best_match_end: int = search_from + result['locations'][0][-1]
 
         # Move the search area forward in case the target is of length 1
-        search_from = best_match_end if best_match_end > search_from or \
-                                        (elements_in_sentence and len(
-                                            elements_in_sentence[0].text) > 1) else best_match_end + 1
+        #search_from = best_match_end if best_match_end > search_from or \
+        #                                (elements_in_sentence and len(
+        #                                    elements_in_sentence[0].text) > 1) else best_match_end + 1
+
+        search_from = best_match_end + 1
 
         if PRINT_ALIGNMENT:
             print(
@@ -368,7 +370,7 @@ def parse_record(xml_path: str, pdf_path: str) -> None:
         result: dict = None
         similarity_curr: float = 0
         similarity_prev: float = -1
-        BUFFER: int = 3
+        BUFFER: int = 1
 
         while similarity_prev < similarity_curr < 1.0:
             # adjust searching area while searching for the target sentence
@@ -397,7 +399,7 @@ def parse_record(xml_path: str, pdf_path: str) -> None:
         if xml_element.tag == NOTE_TAG:
             continue
 
-        parse_words(session_pdf_content[best_match_start - 1:best_match_end + 1], xml_element)
+        parse_words(session_pdf_content[best_match_start:best_match_end + 1], xml_element)
 
     # Save the updated XML content
     save_xml_tree(xml_tree, os.path.join(OUTPUT_FILE, os.path.basename(xml_path)))
@@ -411,7 +413,7 @@ def main() -> None:
     files_converted = 0
 
     xml_files = os.listdir(PATH_TO_XML_FILES)
-    for i, xml_file in enumerate(xml_files):
+    for i, xml_file in enumerate([xml_files[-1]]):
 
         xml_path = os.path.join(PATH_TO_XML_FILES, xml_file)
 
