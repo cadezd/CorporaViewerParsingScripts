@@ -138,7 +138,7 @@ def batch_lemmatize(texts, lang, sentence_ids=None, batch_size=64, n_process=1):
     results = []
 
     # Disable components not needed for lemmatization to save memory/CPU
-    disable_comps = [c for c in ("parser", "ner") if c in nlp.pipe_names]
+    disable_comps = [c for c in ("parser") if c in nlp.pipe_names]
     with nlp.select_pipes(disable=disable_comps):
         with alive_bar(len(texts), title=f"Lemmatizing ({lang})", force_tty=True) as bar:
             bar(0)
@@ -441,7 +441,7 @@ def parse_zapisnik(xml_root):
     meeting["corpus"] = CORPUS_NAME
 
     # gather data about sentences and words
-    coords_index = build_coords_index(xml_root)
+    coords_index = build_coords_index(xml_root, NAMESPACE_MAPPINGS)
     transformed_sentences = transform_sentences_fast(meeting, coords_index=coords_index)
     transformed_words = transform_words_fast(meeting, coords_index=coords_index)
 

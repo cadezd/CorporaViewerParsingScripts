@@ -28,6 +28,7 @@ proper_nouns = set()
 
 nlp_sl = spacy.load('sl_core_news_sm')
 nlp_hr = spacy.load('hr_core_news_sm')
+nlp_sr = spacy.load('Tanor/sr_Spacy_Serbian_Model_SrpKor4Tagging_BERTICOVO')
 
 
 def ensure_translation_model_loaded(model_name="facebook/nllb-200-distilled-1.3B"):
@@ -214,31 +215,53 @@ def parse_agendas(xml_root):
     return agendas
 
 
-def lemmatize_text(text, lang, sentence_id):
+
+def batch_lemmatize(texts, lang, sentence_ids=None, batch_size=64, n_process=1):
     global proper_nouns
 
-    doc = None
     if lang == 'sl':
-        doc = nlp_sl(text)
-    elif lang == 'hr' or lang == 'sr':
-        doc = nlp_hr(text)
+        nlp = nlp_sl
+    elif lang == 'hr':
+        nlp = nlp_hr
+    elif lang == 'sr':
+        nlp = nlp_sr
     else:
-        raise Exception(f"Invalid language: {lang}")
+        print(f"batch_lemmatize(): language '{lang}' not supported")
+        return [[] for _ in texts]
 
-    words = []
-    for token in doc:
-        word = {
-            'id': f"{sentence_id}.{token.i}.({lang})",
-            'lemma': token.lemma_,
-            'text': token.text,
-            'propn': 1 if token.pos_ == 'PROPN' else 0
-        }
-        words.append(word)
+    if sentence_ids is None:
+        sentence_ids = [f"0" for _ in texts]
 
-        if token.pos_ == 'PROPN':
-            proper_nouns.add(token.lemma_)
+    results = []
 
-    return words
+    disable_comps = [c for c in ("parser") if c in nlp.pipe_names]
+    with nlp.select_pipes(disable=disable_comps):
+        with alive_bar(len(texts), title=f"Lemmatizing ({lang})", force_tty=True) as bar:
+            bar(0)
+            for doc, sid in zip(nlp.pipe(texts, batch_size=batch_size, n_process=n_process), sentence_ids):
+                words = []
+                for i, token in enumerate(doc):
+                    word = {}
+                    word["id"] = sid + "." + str(i + 1) + ".(" + lang + ")"
+                    word["type"] = "pc" if token.is_punct else "w"
+                    word["lemma"] = token.lemma_
+                    word["text"] = token.text
+                    word["propn"] = 1 if token.pos_ == "PROPN" else 0
+
+                    # Adjust join attribute (needed to reconstruct the original text)
+                    word["join"] = "natural"
+                    if i < len(doc) - 1 and not token.whitespace_:
+                        word["join"] = "right"
+
+                    words.append(word)
+
+                    if token.pos_ == "PROPN":
+                        proper_nouns.add(token.lemma_)
+
+                results.append(words)
+                bar()
+
+    return results
 
 
 def parse_sentence(sentence_root, segment_page, segment_id, speaker):
@@ -409,15 +432,10 @@ def translate_sentences(sentences, source_lang, target_lang, chunk_size=10, num_
 def translate_meeting(meeting):
     start_time = time.time()
 
-    # sentences list
-    hr_ids = []
-    hr_sentences = []
-
-    sr_ids = []
-    sr_sentences = []
-
-    sl_ids = []
-    sl_sentences = []
+    # lists for sentence ids and texts by language
+    hr_ids, hr_texts = [], []
+    sr_ids, sr_texts = [], []
+    sl_ids, sl_texts = [], []
 
     # filter out none sentences
     meeting['sentences'] = [sentence for sentence in meeting['sentences'] if sentence is not None]
@@ -425,102 +443,112 @@ def translate_meeting(meeting):
     for sentence in meeting['sentences']:
         if sentence['original_language'] == 'hr':
             hr_ids.append(sentence['id'])
-            hr_sentences.append(sentence['translations'][0]['text'])
+            hr_texts.append(sentence['translations'][0]['text'])
         elif sentence['original_language'] == 'sr':
             sr_ids.append(sentence['id'])
-            sr_sentences.append(sentence['translations'][0]['text'])
+            sr_texts.append(sentence['translations'][0]['text'])
         elif sentence['original_language'] == 'sl':
             sl_ids.append(sentence['id'])
-            sl_sentences.append(sentence['translations'][0]['text'])
-        else:
-            raise Exception(f"Invalid language: {sentence['original_language']}")
+            sl_texts.append(sentence['translations'][0]['text'])
 
-    hr_translations = '\n'.join(hr_sentences)
-    sr_translations = '\n'.join(sr_sentences)
-    sl_translations = '\n'.join(sl_sentences)
+    # HR -> SL, SR
+    if len(hr_texts) > 0:
+        hr2sl = translate_sentences(hr_texts, 'hrv_Latn', 'slv_Latn')
+        hr2sr = translate_sentences(hr_texts, 'hrv_Latn', 'srp_Cyrl')
 
-    if len(hr_translations) > 0:
-        # translate hr sentences
-        hr2sl = translate_sentences(hr_translations, 'sr', 'sl')
-        hr2sr = cyrtranslit.to_cyrillic(hr_translations).split("\n")
+        lemm_sl = batch_lemmatize(hr2sl, 'sl', hr_ids)
+        lemm_sr = batch_lemmatize(hr2sr, 'sr', hr_ids)
 
-        for i in range(len(hr_ids)):
-            translation1 = {
+        for i, sid in enumerate(hr_ids):
+            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == sid), None)
+            if sentence_index is None:
+                continue
+
+            translation_sl = {
                 'lang': 'sl',
                 'original': 0,
+                'speaker': meeting['sentences'][sentence_index]['speaker'],
                 'text': hr2sl[i],
-                'words': lemmatize_text(hr2sl[i], 'sl', hr_ids[i])
+                'words': lemm_sl[i]
             }
-
-            translation2 = {
+            translation_sr = {
                 'lang': 'sr',
                 'original': 0,
+                'speaker': meeting['sentences'][sentence_index]['speaker'],
                 'text': hr2sr[i],
-                'words': lemmatize_text(hr2sr[i], 'sr', hr_ids[i])
+                'words': lemm_sr[i]
             }
 
-            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == hr_ids[i]),
-                                  None)
-            meeting['sentences'][sentence_index]['translations'].append(translation1)
-            meeting['sentences'][sentence_index]['translations'].append(translation2)
+            meeting['sentences'][sentence_index]['translations'].append(translation_sl)
+            meeting['sentences'][sentence_index]['translations'].append(translation_sr)
 
     hr_time = time.time()
     print(f"Translating HR to SL & SR sentences in {hr_time - start_time} seconds")
 
-    if len(sr_translations) > 0:
-        # translate sr sentences
-        sr_latinic = cyrtranslit.to_latin(sr_translations)
-        sr2hr = sr_latinic.split("\n")
-        sr2sl = translate_sentences(sr_latinic, 'sr', 'sl')
+    # SR -> HR (latinic) and SL
+    if len(sr_texts) > 0:
+        sr2sl = translate_sentences(sr_texts, 'srp_Cyrl', 'slv_Latn')
+        sr2hr = translate_sentences(sr_texts, 'srp_Cyrl', 'hrv_Latn')
 
-        for i in range(len(sr_ids)):
-            translation1 = {
+        lemm_hr = batch_lemmatize(sr2hr, 'hr', sr_ids)
+        lemm_sl = batch_lemmatize(sr2sl, 'sl', sr_ids)
+
+        for i, sid in enumerate(sr_ids):
+            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == sid), None)
+            if sentence_index is None:
+                continue
+
+            translation_hr = {
                 'lang': 'hr',
                 'original': 0,
+                'speaker': meeting['sentences'][sentence_index]['speaker'],
                 'text': sr2hr[i],
-                'words': lemmatize_text(sr2hr[i], 'hr', sr_ids[i])
+                'words': lemm_hr[i]
             }
-
-            translation2 = {
+            translation_sl = {
                 'lang': 'sl',
                 'original': 0,
+                'speaker': meeting['sentences'][sentence_index]['speaker'],
                 'text': sr2sl[i],
-                'words': lemmatize_text(sr2sl[i], 'sl', sr_ids[i])
+                'words': lemm_sl[i]
             }
 
-            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == sr_ids[i]),
-                                  None)
-            meeting['sentences'][sentence_index]['translations'].append(translation1)
-            meeting['sentences'][sentence_index]['translations'].append(translation2)
+            meeting['sentences'][sentence_index]['translations'].append(translation_hr)
+            meeting['sentences'][sentence_index]['translations'].append(translation_sl)
 
     sr_time = time.time()
     print(f"Translating SR to HR & SL sentences in {sr_time - hr_time} seconds")
 
-    # translate sl sentences
-    if len(sl_translations) > 0:
-        sl2hr = translate_sentences(sl_translations, 'sl', 'sr')
-        # latinic sentences are already split, so we use to_cyrillic on each sentence
-        sl2sr = [cyrtranslit.to_cyrillic(sentence) for sentence in sl2hr]
+    # SL -> HR (latin) and SR (cyrillic)
+    if len(sl_texts) > 0:
+        sl2hr = translate_sentences(sl_texts, 'slv_Latn', 'hrv_Latn')
+        sl2sr = translate_sentences(sl_texts, 'slv_Latn', 'srp_Cyrl')
 
-        for i in range(len(sl_ids)):
-            translation1 = {
+        lemm_hr = batch_lemmatize(sl2hr, 'hr', sl_ids)
+        lemm_sr = batch_lemmatize(sl2sr, 'sr', sl_ids)
+
+        for i, sid in enumerate(sl_ids):
+            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == sid), None)
+            if sentence_index is None:
+                continue
+
+            translation_hr = {
                 'lang': 'hr',
                 'original': 0,
+                'speaker': meeting['sentences'][sentence_index]['speaker'],
                 'text': sl2hr[i],
-                'words': lemmatize_text(sl2hr[i], 'hr', sl_ids[i])
+                'words': lemm_hr[i]
             }
-
-            translation2 = {
+            translation_sr = {
                 'lang': 'sr',
                 'original': 0,
+                'speaker': meeting['sentences'][sentence_index]['speaker'],
                 'text': sl2sr[i],
-                'words': lemmatize_text(sl2sr[i], 'sr', sl_ids[i])
+                'words': lemm_sr[i]
             }
 
-            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == sl_ids[i]),
-                                  None)
-            meeting['sentences'][sentence_index]['translations'].append(translation1)
-            meeting['sentences'][sentence_index]['translations'].append(translation2)
+            meeting['sentences'][sentence_index]['translations'].append(translation_hr)
+            meeting['sentences'][sentence_index]['translations'].append(translation_sr)
 
     end_time = time.time()
     print(f"Translating SL to HR & SR sentences in {end_time - sr_time} seconds")
@@ -547,7 +575,7 @@ def parse_zapisnik(xml_root):
     translate_meeting(meeting)
 
     # gather data about sentences and words
-    coords_index = build_coords_index(xml_root)
+    coords_index = build_coords_index(xml_root, NAMESPACE_MAPPINGS)
     transformed_sentences = transform_sentences_fast(meeting, coords_index=coords_index)
     transformed_words = transform_words_fast(meeting, coords_index=coords_index)
 
