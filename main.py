@@ -10,7 +10,7 @@ import thumbnailer
 def main():
     parser = argparse.ArgumentParser(
         prog='ParlaVis Data Preparation Tool',
-        description='This program is used to prepare PDF and thumbnail data for ParlaVis.'
+        description='This program is used to prepare JSON, PDF and thumbnails data for ParlaVis.'
     )
 
     subparsers = parser.add_subparsers(dest='command', required=True, help='Subcommand to run')
