@@ -147,7 +147,7 @@ def save_xml_tree(xml_tree: ET.ElementTree, output_file: str) -> None:
 
 
 # Filters out chars that are not part of the session content (before the session_start_str and after the page where session_end_str occurs)
-def get_session_content(pdf_chars: list[dict], session_start_str: str | None, session_end_str: str | None) -> \
+def get_session_content(pdf_chars: list[dict], session_start_str: str, session_end_str: str) -> \
         list[dict]:
     # session_start_str is string below which we start extracting text (start of the session content)
     # session_end_str - page where last occurrence of this string is found is the last page of the session content
