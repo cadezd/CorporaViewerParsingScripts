@@ -26,8 +26,8 @@ CORPUS_NAME = 'Yu1Parl'
 
 proper_nouns = set()
 
-nlp_sl = spacy.load('sl_core_news_sm')
-nlp_hr = spacy.load('hr_core_news_sm')
+nlp_sl = spacy.load('sl_core_news_md')
+nlp_hr = spacy.load('hr_core_news_md')
 nlp_sr = spacy.load('Tanor/sr_Spacy_Serbian_Model_SrpKor4Tagging_BERTICOVO')
 
 
