@@ -51,6 +51,20 @@ def ensure_translation_model_loaded(model_name="facebook/nllb-200-distilled-1.3B
             print("Warning: could not convert model to fp16")
 
 
+def translate_text(text, source_lang, target_lang):
+    ensure_translation_model_loaded()
+
+    translated_text = ""
+
+    tokenizer.src_lang = source_lang
+    with torch.no_grad():
+        encoded = tokenizer(text, textreturn_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        generated_tokens = model.generate(**encoded, forced_bos_token_id=tokenizer.get_lang_id(target_lang))
+
+        translated_text = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+
+    return translated_text
+
 
 # finds all agendas and contents and returns them as a list of dictionaries
 def parse_agendas(xml_root, meeting_id):
@@ -107,7 +121,6 @@ def parse_agendas(xml_root, meeting_id):
             return []
 
     return agendas
-
 
 
 def batch_lemmatize(texts, lang, sentence_ids=None, batch_size=64, n_process=1):
@@ -281,7 +294,6 @@ def parse_speeches(xml_root):
 
     sentences, notes, _ = process_node(debate_section, activeSpeaker)
     return sentences, notes
-
 
 
 def translate_sentences(sentences, source_lang, target_lang, chunk_size=10, num_beams=3):
