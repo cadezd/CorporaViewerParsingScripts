@@ -1,0 +1,593 @@
+import xml.etree.ElementTree as ET
+import time
+import os
+import re
+
+import requests
+import spacy
+import cyrtranslit
+import torch
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from alive_progress import alive_bar
+
+from utils import *
+
+# Text is either in Slovene or Serbo-Croatian. We consider that the text is in Croatian, if Serbo-Croatian is
+# written with latinic characters and in Serbian if it is written in cyrillic. Since Libretranslate
+# does not support croatian language, we translate it between Slovene to Croatian by using 'sl' and 'sr'.
+# Croatian is used as a sort of bridge language. If we want to translate between Slovene and Serbian,
+# which is in cyrillic, we use cyrtranslit to convert the text to latinic and then use Libretranslate
+# to translate it between Slovene and Croatian.
+
+
+NAMESPACE_MAPPINGS = {"ns0": "http://www.tei-c.org/ns/1.0"}
+
+CORPUS_NAME = 'Yu1Parl'
+
+proper_nouns = set()
+
+nlp_sl = spacy.load('sl_core_news_sm')
+nlp_hr = spacy.load('hr_core_news_sm')
+
+
+def ensure_translation_model_loaded(model_name="facebook/nllb-200-distilled-1.3B"):
+    global tokenizer, model, device, USE_FP16
+    if tokenizer is not None and model is not None:
+        return
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+    model.eval()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    if device == "cuda" and USE_FP16:
+        # convert model to fp16 for lower memory usage / faster inference on supported GPUs
+        try:
+            model.half()
+        except Exception:
+            print("Warning: could not convert model to fp16")
+
+
+def translate_text(text, source_lang, target_lang):
+    ensure_translation_model_loaded()
+
+    translated_text = ""
+
+    tokenizer.src_lang = source_lang
+    with torch.no_grad():
+        encoded = tokenizer(text, textreturn_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+        generated_tokens = model.generate(**encoded, forced_bos_token_id=tokenizer.get_lang_id(target_lang))
+
+        translated_text = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+
+    return translated_text
+
+
+def parse_agendas(xml_root):
+    agendas = []
+    for agenda in xml_root.findall('.//ns0:preAgenda', NAMESPACE_MAPPINGS):
+        agenda_attribs = parse_attribs(agenda)
+        if not 'lang' in agenda_attribs or not agenda_attribs['lang'] in ['sl', 'hr', 'sr']:
+            print(f"Invalid language: {agenda_attribs['lang']}")
+            continue
+        agenda_items = []
+        agenda_index = 0
+        for item in agenda:
+            item_attribs = parse_attribs(item)
+            if parse_tag(item) == 'item' and item_attribs['n']:
+                agenda_index += 1
+                agenda_items.append({
+                    'n': agenda_index,
+                    'text': item.text
+                })
+
+        agendas.append({
+            'lang': agenda_attribs['lang'],
+            'items': agenda_items
+        })
+
+    # translate if necessary
+    if len(agendas) == 1:
+        if agendas[0]['lang'] == 'sl':
+            agenda_hr = []
+            agenda_sr = []
+            for item in agendas[0]["items"]:
+                serbo_croatian_latinic = translate_text(item['text'], 'sl', 'sr')
+                serbo_croatian_cyrilic = cyrtranslit.to_cyrillic(serbo_croatian_latinic)
+                agenda_hr.append({
+                    'n': item['n'],
+                    'text': serbo_croatian_latinic
+                })
+                agenda_sr.append({
+                    'n': item['n'],
+                    'text': serbo_croatian_cyrilic
+                })
+
+            agendas.append({
+                'lang': 'hr',
+                'items': agenda_hr
+            })
+            agendas.append({
+                'lang': 'sr',
+                'items': agenda_sr
+            })
+        elif agendas[0]['lang'] == 'hr':
+            agenda_sl = []
+            agenda_sr = []
+            for item in agendas[0]["items"]:
+                serbo_croatian_cyrilic = cyrtranslit.to_cyrillic(item['text'])
+                slovene = translate_text(item['text'], 'sr', 'sl')
+                agenda_sl.append({
+                    'n': item['n'],
+                    'text': slovene
+                })
+                agenda_sr.append({
+                    'n': item['n'],
+                    'text': serbo_croatian_cyrilic
+                })
+
+            agendas.append({
+                'lang': 'sl',
+                'items': agenda_sl
+            })
+            agendas.append({
+                'lang': 'sr',
+                'items': agenda_sr
+            })
+        else:
+            if not agendas[0]['lang'] == 'sr':
+                print(f"Invalid language: {agendas[0]['lang']}")
+            agenda_sl = []
+            agenda_hr = []
+            for item in agendas[0]["items"]:
+                serbo_croatian_latinic = cyrtranslit.to_latin(item['text'])
+                slovene = translate_text(serbo_croatian_latinic, 'sr', 'sl')
+                agenda_sl.append({
+                    'n': item['n'],
+                    'text': slovene
+                })
+                agenda_hr.append({
+                    'n': item['n'],
+                    'text': serbo_croatian_latinic
+                })
+
+            agendas.append({
+                'lang': 'sl',
+                'items': agenda_sl
+            })
+            agendas.append({
+                'lang': 'hr',
+                'items': agenda_hr
+            })
+    elif len(agendas) == 2:
+        hr_agenda = next((agenda for agenda in agendas if agenda['lang'] == 'hr'), None)
+        sr_agenda = next((agenda for agenda in agendas if agenda['lang'] == 'sr'), None)
+        sl_agenda = next((agenda for agenda in agendas if agenda['lang'] == 'sl'), None)
+
+        if hr_agenda is not None and sr_agenda is not None and sl_agenda is None:
+            sl_agenda = []
+            for item in hr_agenda['items']:
+                slovene = translate_text(item['text'], 'sr', 'sl')
+                sl_agenda.append({
+                    'n': item['n'],
+                    'text': slovene
+                })
+
+            agendas.append({
+                'lang': 'sl',
+                'items': sl_agenda
+            })
+
+        elif hr_agenda is not None and sl_agenda is not None and sr_agenda is None:
+            sr_agenda = []
+            for item in hr_agenda['items']:
+                serbo_croatian_cyrilic = cyrtranslit.to_cyrillic(item['text'])
+                sr_agenda.append({
+                    'n': item['n'],
+                    'text': serbo_croatian_cyrilic
+                })
+
+            agendas.append({
+                'lang': 'sr',
+                'items': sr_agenda
+            })
+
+        elif sl_agenda is not None and sr_agenda is not None and hr_agenda is None:
+            hr_agenda = []
+            for item in sl_agenda['items']:
+                serbo_croatian_latinic = cyrtranslit.to_latin(item['text'])
+                hr_agenda.append({
+                    'n': item['n'],
+                    'text': serbo_croatian_latinic
+                })
+
+            agendas.append({
+                'lang': 'hr',
+                'items': hr_agenda
+            })
+
+        else:
+            raise Exception(f"Invalid number of agendas is None:\n{hr_agenda}\n{sl_agenda}\n{sr_agenda}")
+    else:
+        print(f"Found {len(agendas)} agendas. Skipping translation.")
+
+    return agendas
+
+
+def lemmatize_text(text, lang, sentence_id):
+    global proper_nouns
+
+    doc = None
+    if lang == 'sl':
+        doc = nlp_sl(text)
+    elif lang == 'hr' or lang == 'sr':
+        doc = nlp_hr(text)
+    else:
+        raise Exception(f"Invalid language: {lang}")
+
+    words = []
+    for token in doc:
+        word = {
+            'id': f"{sentence_id}.{token.i}.({lang})",
+            'lemma': token.lemma_,
+            'text': token.text,
+            'propn': 1 if token.pos_ == 'PROPN' else 0
+        }
+        words.append(word)
+
+        if token.pos_ == 'PROPN':
+            proper_nouns.add(token.lemma_)
+
+    return words
+
+
+def parse_sentence(sentence_root, segment_page, segment_id, speaker):
+    global proper_nouns
+    sentence_attribs = parse_attribs(sentence_root)
+
+    if sentence_attribs['lang'] not in ['sl', 'hr', 'sr']:
+        print(f"Invalid language: {sentence_attribs['lang']}. Skipping.")
+        return
+
+    sentence = {
+        'id': sentence_attribs['id'],
+        'segment_page': segment_page,
+        'segment_id': segment_id,
+        'speaker': speaker,
+        'translations': []
+    }
+
+    translation = {
+        'lang': sentence_attribs['lang'],
+        'original': 1,
+        'text': '',
+        'words': []
+    }
+
+    for word_root in sentence_root:
+        word_tag = parse_tag(word_root)
+
+        if word_tag == 'w' or word_tag == 'pc':
+            word_attribs = parse_attribs(word_root)
+            upostag = word_attribs.get("msd").split("|")[0].split("=")[1]
+            word = {
+                'id': word_attribs['id'],
+                'text': word_root.text,
+                'lemma': word_attribs['lemma'],
+                'propn': 1 if upostag == 'PROPN' else 0
+            }
+
+            if upostag == 'PROPN':
+                proper_nouns.add(word['lemma'])
+
+            if not word_tag == "pc" and not word["text"] == "":
+                translation["text"] += " "
+            translation["text"] += word["text"]
+            translation["words"].append(word)
+
+        else:
+            print(f"Invalid word tag: {word_tag}. Skipping.")
+
+    sentence["translations"].append(translation)
+    sentence["original_language"] = translation["lang"]
+
+    return sentence
+
+
+def parse_note(note_root, segment_page, segment_id, speaker):
+    note = {
+        'type': 'comment',
+        'text': note_root.text,
+        'page': segment_page,
+        'segment_id': segment_id,
+        'speaker': speaker
+    }
+
+    return note
+
+
+def parse_segment(segment_root, speaker):
+    sentences = []
+    notes = []
+    attribs = parse_attribs(segment_root)
+
+    segment_page = -1  # no data in xml
+    segment_id = attribs['id']
+
+    for child in segment_root:
+        child_tag = parse_tag(child)
+        if child_tag == 's':
+            sentences.append(parse_sentence(child, segment_page, segment_id, speaker))
+        elif child_tag == 'note':
+            notes.append(parse_note(child, segment_page, segment_id, speaker))
+        else:
+            print(f"Invalid segment child tag: {child_tag} Skipping.")
+
+    return sentences, notes
+
+
+def parse_speeches(xml_root):
+    sentences = []
+    notes = []
+    activeSpeaker = None
+
+    # find debateSection
+    debate_section = xml_root.find(".//ns0:div[@type='debateSection']", NAMESPACE_MAPPINGS)
+    if debate_section is None:
+        return sentences, notes
+
+    def process_node(node, current_speaker):
+        node_sentences = []
+        node_notes = []
+
+        for child in node:
+            tag = parse_tag(child)
+            attribs = parse_attribs(child.attrib)
+
+            # utterance or paragraph with a segment child
+            if (tag == "u" or tag == "p") and len(child) > 0 and parse_tag(child[0]) == "seg":
+                # utterances have a speaker, paragraphs do not
+                speaker = current_speaker if tag == "u" else None
+                parsed_sentences, parsed_notes = parse_segment(child[0], speaker)
+                node_sentences.extend(parsed_sentences)
+                node_notes.extend(parsed_notes)
+
+            # speaker note updates current speaker for subsequent siblings
+            elif tag == "note" and attribs.get("type") == "speaker":
+                # sanitize speaker string
+                current_speaker = re.sub(r'[^a-zA-ZäöüßÄÖÜčšžČŠŽ. 0-9]', '', child.text)
+
+            # nested div -> recurse one level deeper (and deeper if needed)
+            elif tag == "div":
+                nested_sentences, nested_notes, current_speaker = process_node(child, current_speaker)
+                node_sentences.extend(nested_sentences)
+                node_notes.extend(nested_notes)
+
+            # ignore other tags
+        return node_sentences, node_notes, current_speaker
+
+    sentences, notes, _ = process_node(debate_section, activeSpeaker)
+    return sentences, notes
+
+
+def translate_sentences(sentences, source_lang, target_lang, chunk_size=10, num_beams=3):
+    ensure_translation_model_loaded()
+
+    translations = []
+
+    tokenizer.src_lang = source_lang
+    with torch.no_grad():
+        with alive_bar(len(sentences), title=f"Translating {source_lang}→{target_lang}", force_tty=True) as bar:
+            bar(0)
+            for start in range(0, len(sentences), chunk_size):
+                end = start + chunk_size
+                chunk = sentences[start:end]
+
+                encoded = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
+                generated_tokens = model.generate(
+                    **encoded,
+                    forced_bos_token_id=get_lang_id(target_lang),
+                    num_beams=num_beams,
+                    early_stopping=False,
+                    length_penalty=1.3,
+                    max_new_tokens=512,
+                )
+
+                decoded = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+                translations.extend(decoded)
+
+                # free intermediate tensors and clear cached GPU memory
+                if device == "cuda":
+                    del encoded, generated_tokens
+                    torch.cuda.empty_cache()
+
+                bar(len(chunk))
+
+    return translations
+
+
+def translate_meeting(meeting):
+    start_time = time.time()
+
+    # sentences list
+    hr_ids = []
+    hr_sentences = []
+
+    sr_ids = []
+    sr_sentences = []
+
+    sl_ids = []
+    sl_sentences = []
+
+    # filter out none sentences
+    meeting['sentences'] = [sentence for sentence in meeting['sentences'] if sentence is not None]
+
+    for sentence in meeting['sentences']:
+        if sentence['original_language'] == 'hr':
+            hr_ids.append(sentence['id'])
+            hr_sentences.append(sentence['translations'][0]['text'])
+        elif sentence['original_language'] == 'sr':
+            sr_ids.append(sentence['id'])
+            sr_sentences.append(sentence['translations'][0]['text'])
+        elif sentence['original_language'] == 'sl':
+            sl_ids.append(sentence['id'])
+            sl_sentences.append(sentence['translations'][0]['text'])
+        else:
+            raise Exception(f"Invalid language: {sentence['original_language']}")
+
+    hr_translations = '\n'.join(hr_sentences)
+    sr_translations = '\n'.join(sr_sentences)
+    sl_translations = '\n'.join(sl_sentences)
+
+    if len(hr_translations) > 0:
+        # translate hr sentences
+        hr2sl = translate_sentences(hr_translations, 'sr', 'sl')
+        hr2sr = cyrtranslit.to_cyrillic(hr_translations).split("\n")
+
+        for i in range(len(hr_ids)):
+            translation1 = {
+                'lang': 'sl',
+                'original': 0,
+                'text': hr2sl[i],
+                'words': lemmatize_text(hr2sl[i], 'sl', hr_ids[i])
+            }
+
+            translation2 = {
+                'lang': 'sr',
+                'original': 0,
+                'text': hr2sr[i],
+                'words': lemmatize_text(hr2sr[i], 'sr', hr_ids[i])
+            }
+
+            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == hr_ids[i]),
+                                  None)
+            meeting['sentences'][sentence_index]['translations'].append(translation1)
+            meeting['sentences'][sentence_index]['translations'].append(translation2)
+
+    hr_time = time.time()
+    print(f"Translating HR to SL & SR sentences in {hr_time - start_time} seconds")
+
+    if len(sr_translations) > 0:
+        # translate sr sentences
+        sr_latinic = cyrtranslit.to_latin(sr_translations)
+        sr2hr = sr_latinic.split("\n")
+        sr2sl = translate_sentences(sr_latinic, 'sr', 'sl')
+
+        for i in range(len(sr_ids)):
+            translation1 = {
+                'lang': 'hr',
+                'original': 0,
+                'text': sr2hr[i],
+                'words': lemmatize_text(sr2hr[i], 'hr', sr_ids[i])
+            }
+
+            translation2 = {
+                'lang': 'sl',
+                'original': 0,
+                'text': sr2sl[i],
+                'words': lemmatize_text(sr2sl[i], 'sl', sr_ids[i])
+            }
+
+            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == sr_ids[i]),
+                                  None)
+            meeting['sentences'][sentence_index]['translations'].append(translation1)
+            meeting['sentences'][sentence_index]['translations'].append(translation2)
+
+    sr_time = time.time()
+    print(f"Translating SR to HR & SL sentences in {sr_time - hr_time} seconds")
+
+    # translate sl sentences
+    if len(sl_translations) > 0:
+        sl2hr = translate_sentences(sl_translations, 'sl', 'sr')
+        # latinic sentences are already split, so we use to_cyrillic on each sentence
+        sl2sr = [cyrtranslit.to_cyrillic(sentence) for sentence in sl2hr]
+
+        for i in range(len(sl_ids)):
+            translation1 = {
+                'lang': 'hr',
+                'original': 0,
+                'text': sl2hr[i],
+                'words': lemmatize_text(sl2hr[i], 'hr', sl_ids[i])
+            }
+
+            translation2 = {
+                'lang': 'sr',
+                'original': 0,
+                'text': sl2sr[i],
+                'words': lemmatize_text(sl2sr[i], 'sr', sl_ids[i])
+            }
+
+            sentence_index = next((index for (index, d) in enumerate(meeting['sentences']) if d['id'] == sl_ids[i]),
+                                  None)
+            meeting['sentences'][sentence_index]['translations'].append(translation1)
+            meeting['sentences'][sentence_index]['translations'].append(translation2)
+
+    end_time = time.time()
+    print(f"Translating SL to HR & SR sentences in {end_time - sr_time} seconds")
+    print(f"Translated meeting in {end_time - start_time} seconds")
+
+    return
+
+
+def parse_zapisnik(xml_root):
+    start_time = time.time()
+    meeting_id = xml_root.attrib['{http://www.w3.org/XML/1998/namespace}id']
+    sentences, notes = parse_speeches(xml_root)
+
+    meeting = {
+        'id': meeting_id,
+        'date': parse_date_from_id(meeting_id),
+        'titles': parse_titles(xml_root),
+        'agendas': parse_agendas(xml_root),
+        'sentences': sentences,
+        'notes': notes,
+        'corpus': CORPUS_NAME
+    }
+
+    translate_meeting(meeting)
+
+    # gather data about sentences and words
+    coords_index = build_coords_index(xml_root)
+    transformed_sentences = transform_sentences_fast(meeting, coords_index=coords_index)
+    transformed_words = transform_words_fast(meeting, coords_index=coords_index)
+
+    mid_time = time.time()
+    print(f"Parsed meeting in {mid_time - start_time} seconds")
+
+    return meeting, transformed_sentences, transformed_words
+
+
+def parse(source, destination, from_idx=0, to_idx=-1):
+    files = os.listdir(source)
+    for i, file in enumerate(files):
+
+        if i < from_idx:
+            continue
+
+        if i >= to_idx and to_idx != -1:
+            break
+
+        if not file.endswith(".xml") or not file.startswith("DezelniZborKranjski"):
+            continue
+
+        path = os.path.join(source, file)
+
+        xml_tree = ET.parse(path)
+        xml_root = xml_tree.getroot()
+
+        print("parse(): processing file " + file)
+
+        # initialize parser
+        zapisnik, povedi, besede = parse_zapisnik(xml_root)
+
+        # save data to jsonl files
+        file_path = os.path.join(destination, zapisnik["id"] + "_meeting.jsonl")
+        save_to_jsonl([zapisnik], file_path)
+
+        file_path = os.path.join(destination, zapisnik["id"] + "_sentences.jsonl")
+        save_to_jsonl(povedi, file_path)
+
+        file_path = os.path.join(destination, zapisnik["id"] + "_words.jsonl")
+        save_to_jsonl(besede, file_path)
+
+        print(f"parse(): {i+1}/{len(files)} files processed\n")

@@ -5,9 +5,11 @@ import shutil
 import fitz
 from pathlib import Path
 
-
 import subprocess
 import os
+
+import parser_dzk
+
 
 def optimize_pdf(input_file, output_file, quality='ebook', ghostscript_path='gs'):
     quality_settings = {
@@ -70,8 +72,6 @@ def optimize_pdf(input_file, output_file, quality='ebook', ghostscript_path='gs'
             os.remove(temp_output)
 
 
-
-
 def optimize_pdfs(input_file, output_file, quality="ebook", ghostscript_path='gs'):
     print("Optimizing PDF files in directory:", input_file)
 
@@ -83,7 +83,6 @@ def optimize_pdfs(input_file, output_file, quality="ebook", ghostscript_path='gs
 
         optimized_file_path = os.path.join(output_file, file)
         optimize_pdf(path, optimized_file_path, quality=quality, ghostscript_path=ghostscript_path)
-
 
 
 def create_thumbnails(source, destination):
@@ -169,7 +168,6 @@ def generate_yuparl_file(old_name):
     return f"yu1Parl_{date}_{session_type}_{number}"
 
 
-# python
 def rename_files(source, destination, corpus):
     print(f"Renaming {corpus} files in directory: {source}")
     src = Path(source)
@@ -290,6 +288,42 @@ def main():
         default="gs"
     )
 
+    parse_parser = subparsers.add_parser('parse', help='Generates JSON file from XML files')
+    rename_parser.add_argument(
+        '-c', '--corpus',
+        type=str,
+        required=True,
+        help='Corpus to prepare (e.g., dzk, yuparl, ...)',
+        choices=['dzk', 'yuparl']  # Add other corpora here
+    )
+    parse_parser.add_argument(
+        '-s', '--source',
+        type=str,
+        required=True,
+        help='Source directory containing XML files'
+    )
+    parse_parser.add_argument(
+        '-d', '--destination',
+        type=str,
+        required=True,
+        help='Destination directory for JSON files'
+    )
+    parse_parser.add_argument(
+        '-f', '--from-index',
+        type=int,
+        required=False,
+        help='Starting index for parsing files',
+        default=0
+    )
+    parse_parser.add_argument(
+        '-t', '--to-index',
+        type=int,
+        required=False,
+        help='Ending index for parsing files',
+        default=-1
+    )
+
+
     args = parser.parse_args()
 
     # Execute the appropriate function based on the subcommand
@@ -300,6 +334,11 @@ def main():
             create_thumbnails(args.source, args.destination)
         case 'optimize':
             optimize_pdfs(args.source, args.destination, quality=args.quality, ghostscript_path=rf"{args.ghostscript_path}")
+        case 'parse':
+            if args.corpus == 'dzk':
+                parser_dzk.parse(args.source, args.destination, args.from_index, args.to_index)
+            else :
+                raise NotImplementedError(f"Parsing for corpus '{args.corpus}' is not implemented.")
         case _:
             raise NotImplementedError(f"Command '{args.command}' is not implemented.")
 
