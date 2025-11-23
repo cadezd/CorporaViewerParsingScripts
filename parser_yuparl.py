@@ -28,7 +28,7 @@ proper_nouns = set()
 
 nlp_sl = spacy.load('sl_core_news_md')
 nlp_hr = spacy.load('hr_core_news_md')
-nlp_sr = spacy.load('Tanor/sr_Spacy_Serbian_Model_SrpKor4Tagging_BERTICOVO')
+nlp_sr = spacy.load('sr_Spacy_Serbian_Model_SrpKor4Tagging_BERTICOVO')
 
 
 def ensure_translation_model_loaded(model_name="facebook/nllb-200-distilled-1.3B"):
