@@ -164,30 +164,33 @@ def main():
     args = parser.parse_args()
 
     # Execute the appropriate function based on the subcommand
-    match args.command:
-        case 'rename':
-            renamer.rename_files(args.source, args.destination, args.corpus)
-        case 'thumbnail':
-            thumbnailer.create_thumbnails(args.source, args.destination)
-        case 'optimize':
-            optimizer.optimize_pdfs(args.source, args.destination, quality=args.quality, ghostscript_path=rf"{args.ghostscript_path}")
-        case 'parse':
-            if args.corpus == 'dzk':
-                parser_dzk.parse(args.source, args.destination, args.from_index, args.to_index)
-            elif args.corpus == 'yuparl':
-                parser_yuparl.parse(args.source, args.destination, args.from_index, args.to_index)
-            else:
-                raise NotImplementedError(f"Parsing for corpus '{args.corpus}' is not implemented.")
-        case 'upload':
-            uploader.upload(
-                args.source,
-                args.elasticsearch_host,
-                args.elasticsearch_port,
-                delete_index_if_exists=args.delete_index
-            )
-        case _:
-            raise NotImplementedError(f"Command '{args.command}' is not implemented.")
-
+    if args.command == 'rename':
+        renamer.rename_files(args.source, args.destination, args.corpus)
+    elif args.command == 'thumbnail':
+        thumbnailer.create_thumbnails(args.source, args.destination)
+    elif args.command == 'optimize':
+        optimizer.optimize_pdfs(
+            args.source,
+            args.destination,
+            quality=args.quality,
+            ghostscript_path=args.ghostscript_path
+        )
+    elif args.command == 'parse':
+        if args.corpus == 'dzk':
+            parser_dzk.parse(args.source, args.destination, args.from_index, args.to_index)
+        elif args.corpus == 'yuparl':
+            parser_yuparl.parse(args.source, args.destination, args.from_index, args.to_index)
+        else:
+            raise NotImplementedError(f"Parsing for corpus '{args.corpus}' is not implemented.")
+    elif args.command == 'upload':
+        uploader.upload(
+            args.source,
+            args.elasticsearch_host,
+            args.elasticsearch_port,
+            delete_index_if_exists=args.delete_index
+        )
+    else:
+        raise NotImplementedError(f"Command '{args.command}' is not implemented.")
 
 
 if __name__ == '__main__':
