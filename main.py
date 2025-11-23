@@ -5,6 +5,7 @@ import parser_dzk
 import parser_yuparl
 import renamer
 import thumbnailer
+import uploader
 
 
 def main():
@@ -129,6 +130,36 @@ def main():
         default=-1
     )
 
+    # -------------------------------
+    # Subcommand: upload
+    # -------------------------------
+    upload_parser = subparsers.add_parser('upload', help='Upload JSON data to elasticsearch')
+    upload_parser.add_argument(
+        '-s', '--source',
+        type=str,
+        required=True,
+        help='Source directory containing JSON files'
+    )
+    upload_parser.add_argument(
+        '-e', '--elasticsearch-host',
+        type=str,
+        required=True,
+        help='Elasticsearch host URL'
+    )
+    upload_parser.add_argument(
+        '-p', '--elasticsearch-port',
+        type=int,
+        required=True,
+        help='Elasticsearch port number'
+    )
+    upload_parser.add_argument(
+        '-d', '--delete-index',
+        type=bool,
+        required=False,
+        help='Whether to delete existing indexes before upload',
+        default=False
+    )
+
 
     args = parser.parse_args()
 
@@ -147,6 +178,13 @@ def main():
                 parser_yuparl.parse(args.source, args.destination, args.from_index, args.to_index)
             else:
                 raise NotImplementedError(f"Parsing for corpus '{args.corpus}' is not implemented.")
+        case 'upload':
+            uploader.upload(
+                args.source,
+                args.elasticsearch_host,
+                args.elasticsearch_port,
+                delete_index_if_exists=args.delete_index
+            )
         case _:
             raise NotImplementedError(f"Command '{args.command}' is not implemented.")
 
