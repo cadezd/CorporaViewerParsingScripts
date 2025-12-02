@@ -5,10 +5,12 @@ import re
 
 import requests
 import spacy
+import spacy_transformers
 import cyrtranslit
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from alive_progress import alive_bar
+from huggingface_hub import snapshot_download
 
 from utils import *
 
@@ -28,7 +30,13 @@ proper_nouns = set()
 
 nlp_sl = spacy.load('sl_core_news_md')
 nlp_hr = spacy.load('hr_core_news_md')
-nlp_sr = spacy.load('sr_Spacy_Serbian_Model_SrpKor4Tagging_BERTICOVO')
+nlp_sr = spacy.load(snapshot_download(repo_id="Tanor/sr_Spacy_Serbian_Model_SrpKor4Tagging_BERTICOVO"))
+
+# Model for translation
+tokenizer = None
+model = None
+device = "cuda" if torch.cuda.is_available() else "cpu"
+USE_FP16 = torch.cuda.is_available()
 
 
 def ensure_translation_model_loaded(model_name="facebook/nllb-200-distilled-1.3B"):
@@ -365,7 +373,7 @@ def parse_speeches(xml_root):
 
         for child in node:
             tag = parse_tag(child)
-            attribs = parse_attribs(child.attrib)
+            attribs = parse_attribs(child)
 
             # utterance or paragraph with a segment child
             if (tag == "u" or tag == "p") and len(child) > 0 and parse_tag(child[0]) == "seg":
@@ -393,7 +401,7 @@ def parse_speeches(xml_root):
     return sentences, notes
 
 
-def translate_sentences(sentences, source_lang, target_lang, chunk_size=10, num_beams=3):
+def translate_sentences(sentences, source_lang, target_lang, chunk_size=10, num_beams=5):
     ensure_translation_model_loaded()
 
     translations = []
@@ -409,11 +417,11 @@ def translate_sentences(sentences, source_lang, target_lang, chunk_size=10, num_
                 encoded = tokenizer(chunk, return_tensors="pt", padding=True, truncation=True, max_length=512).to(device)
                 generated_tokens = model.generate(
                     **encoded,
-                    forced_bos_token_id=get_lang_id(target_lang),
+                    forced_bos_token_id=get_lang_id(tokenizer, target_lang),
                     num_beams=num_beams,
-                    early_stopping=False,
-                    length_penalty=1.3,
-                    max_new_tokens=512,
+                    early_stopping=True,
+                    length_penalty=1.2,
+                    max_new_tokens=128,
                 )
 
                 decoded = tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
@@ -565,7 +573,7 @@ def parse_zapisnik(xml_root):
     meeting = {
         'id': meeting_id,
         'date': parse_date_from_id(meeting_id),
-        'titles': parse_titles(xml_root),
+        'titles': parse_titles(xml_root, NAMESPACE_MAPPINGS),
         'agendas': parse_agendas(xml_root),
         'sentences': sentences,
         'notes': notes,
