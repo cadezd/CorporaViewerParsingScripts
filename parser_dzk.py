@@ -85,7 +85,7 @@ def parse_agendas(xml_root, meeting_id):
 
         agendas.append(
             {
-                "lang": parse_attribs(agenda.attrib)["lang"],
+                "lang": parse_attribs(agenda)["lang"],
                 "items": agenda_items
             }
         )
@@ -166,7 +166,7 @@ def batch_lemmatize(texts, lang, sentence_ids=None, batch_size=64, n_process=1):
 
 def parse_sentence(sentence_root, segment_page, segment_id, speaker):
     global prop_nouns
-    sentence_attribs = parse_attribs(sentence_root.attrib)
+    sentence_attribs = parse_attribs(sentence_root)
     sentence = {}
     sentence["id"] = sentence_attribs["id"]
     sentence["translations"] = []
@@ -187,7 +187,7 @@ def parse_sentence(sentence_root, segment_page, segment_id, speaker):
 
         if word_tag == "w" or word_tag == "pc":
             word = {}
-            word_attribs = parse_attribs(word_root.attrib)
+            word_attribs = parse_attribs(word_root)
             word["id"] = word_attribs["id"]
             word["type"] = word_tag
             word["lemma"] = word_attribs["lemma"]
@@ -220,7 +220,6 @@ def parse_sentence(sentence_root, segment_page, segment_id, speaker):
 
 def parse_note(note_root, segment_page, segment_id, speaker):
     note = {}
-    attribs = parse_attribs(note_root.attrib)
 
     note["type"] = "comment"
     note["text"] = note_root.text
@@ -234,7 +233,7 @@ def parse_note(note_root, segment_page, segment_id, speaker):
 def parse_segment(segment_root, speaker):
     sentences = []
     notes = []
-    attribs = parse_attribs(segment_root.attrib)
+    attribs = parse_attribs(segment_root)
 
     segment_page = attribs["n"] if attribs.get("n") else -1
     segment_id = attribs["id"]
@@ -268,7 +267,7 @@ def parse_speeches(xml_root):
 
         for child in node:
             tag = parse_tag(child)
-            attribs = parse_attribs(child.attrib)
+            attribs = parse_attribs(child)
 
             # utterance or paragraph with a segment child
             if (tag == "u" or tag == "p") and len(child) > 0 and parse_tag(child[0]) == "seg":
@@ -330,7 +329,6 @@ def translate_sentences(sentences, source_lang, target_lang, chunk_size=10, num_
                 bar(len(chunk))
 
     return translations
-
 
 # translates the sentences and agendas in a meeting
 def translate_meeting(meeting):
@@ -426,7 +424,7 @@ def parse_zapisnik(xml_root):
     meeting["date"] = parse_date_from_id(meeting["id"])
 
     # get the meeting title
-    meeting["titles"] = parse_titles(xml_root)
+    meeting["titles"] = parse_titles(xml_root, NAMESPACE_MAPPINGS)
 
     # get agendas
     meeting["agendas"] = parse_agendas(xml_root, meeting["id"])
