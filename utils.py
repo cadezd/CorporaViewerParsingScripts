@@ -33,7 +33,7 @@ def parse_titles(xml_root, namespace_mappings):
     titles = []
 
     for title in xml_root.findall(".//ns0:title", namespace_mappings):
-        attribs = parse_attribs(title.attrib)
+        attribs = parse_attribs(title)
         if attribs != {}:
             titles.append({
                 "title": title.text,
