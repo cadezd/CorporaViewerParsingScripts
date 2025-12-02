@@ -96,7 +96,7 @@ def main():
     # Subcommand: parse
     # -------------------------------
     parse_parser = subparsers.add_parser('parse', help='Generates JSON file from XML files')
-    rename_parser.add_argument(
+    parse_parser.add_argument(
         '-c', '--corpus',
         type=str,
         required=True,
