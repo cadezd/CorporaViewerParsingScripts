@@ -4,7 +4,7 @@ import json
 def save_to_jsonl(elements, file_path):
     with open(file_path, "w", encoding="utf-8") as file:
         for element in elements:
-            file.write(json.dumps(element, ensure_ascii=False, indent=4) + "\n")
+            file.write(json.dumps(element, ensure_ascii=False) + "\n")
     print("Saved " + str(len(elements)) + " elements to " + file_path)
 
 
