@@ -93,7 +93,9 @@ def generate_yuparl_file(old_name):
 
 
     number = number_part
-    if "prethodna" in number_part:
+    if number_part == "prethodna":
+        number = "prethodna"
+    elif "prethodna" in number_part:
         number = number_part.replace("prethodna", "prethodna-")
     elif "p" in number_part:
         number = number_part.replace("p", "-")
