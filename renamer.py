@@ -54,7 +54,7 @@ def generate_dzk_file(old_name):
     # volume
     volume = str(old_name.split("-")[2]).replace("p", "-")
     # and number
-    number = old_name.split("-")[3]
+    number = str(old_name.split("-")[3]).replace("p", "-")
 
     # rename file
     new_file_name = f"DZK_{year}-{month}-{day}_{volume}_{number}"
