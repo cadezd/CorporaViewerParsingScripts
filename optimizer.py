@@ -17,21 +17,40 @@ def optimize_pdf(input_file, output_file, quality='ebook', ghostscript_path='gs'
         ghostscript_path,  # Ghostscript command; ensure it's in your PATH
         '-sDEVICE=pdfwrite',
         '-dCompatibilityLevel=1.4',
+
+        # Quality preset (good balance for scans)
         f'-dPDFSETTINGS={quality_settings.get(quality, "/ebook")}',
-        '-dEmbedAllFonts=false',
-        '-dAutoFilterColorImages=false',
+
+        # Fast web viewing (linearized PDF)
+        '-dFastWebView=true',
+
+        # Fonts
+        '-dEmbedAllFonts=true',
+        '-dSubsetFonts=true',
+
+        # Force predictable, PDF.js-friendly encodings
+        "-dAutoFilterColorImages=false",
+        "-dAutoFilterGrayImages=false",
+        "-dAutoFilterMonoImages=false",
         '-dColorImageFilter=/DCTEncode',
-        '-dAutoFilterGrayImages=false',
         '-dGrayImageFilter=/DCTEncode',
         '-dMonoImageFilter=/CCITTFaxEncode',
-        '-dSubsetFonts=true',
-        '-dCompressFonts=true',
-        '-dFastWebView=false',
-        '-dDetectDuplicateImages=true',
-        '-dColorImageDownsampleType=/Bicubic',
+
+        # Normalize resolution (CRUCIAL for speed)
+        "-dDownsampleColorImages=true",
+        "-dColorImageResolution=150",
+
+        "-dDownsampleGrayImages=true",
+        "-dGrayImageResolution=150",
+
+        "-dDownsampleMonoImages=true",
+        "-dMonoImageResolution=300",
+
+        # General flags
         '-dNOPAUSE',
         '-dQUIET',
         '-dBATCH',
+
         f'-sOutputFile={temp_output}',
         input_file
     ]
@@ -63,10 +82,17 @@ def optimize_pdf(input_file, output_file, quality='ebook', ghostscript_path='gs'
             os.remove(temp_output)
 
 
-def optimize_pdfs(input_dir, output_dir, quality="ebook", ghostscript_path='gs'):
+def optimize_pdfs(input_dir, output_dir, quality="ebook", ghostscript_path='gs', from_index=0, to_index=-1):
     print("Optimizing PDF files in directory:", input_dir)
 
-    for file in os.listdir(input_dir):
+    for i, file in enumerate(os.listdir(input_dir)):
+
+        if i < from_index:
+            continue
+
+        if to_index != -1 and i >= to_index:
+            break
+
         if not file.lower().endswith(".pdf"):
             continue
 
