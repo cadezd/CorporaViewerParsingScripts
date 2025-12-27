@@ -1,8 +1,8 @@
 import argparse
 
 import optimizer
-import parser_dzk
-import parser_yuparl
+#import parser_dzk
+#import parser_yuparl
 import renamer
 import thumbnailer
 import uploader
@@ -59,6 +59,13 @@ def main():
         required=True,
         help='Destination directory for thumbnails'
     )
+    thumb_parser.add_argument(
+        '-f', '--force-create',
+        type=bool,
+        required=False,
+        default=False,
+        help='Force creation of thumbnails even if they already exist'
+    )
 
     # -------------------------------
     # Subcommand: optimize
@@ -90,6 +97,20 @@ def main():
         required=False,
         help="Path to the Ghostscript executable (if not in system PATH)",
         default="gs"
+    )
+    optimize_parser.add_argument(
+        '-f', '--from-index',
+        type=int,
+        required=False,
+        help='Starting index for optimizing files',
+        default=0
+    )
+    optimize_parser.add_argument(
+        '-t', '--to-index',
+        type=int,
+        required=False,
+        help='Ending index for optimizing files',
+        default=-1
     )
 
     # -------------------------------
@@ -143,13 +164,13 @@ def main():
     upload_parser.add_argument(
         '-e', '--elasticsearch-host',
         type=str,
-        required=True,
+        default='localhost',
         help='Elasticsearch host URL'
     )
     upload_parser.add_argument(
         '-p', '--elasticsearch-port',
         type=int,
-        required=True,
+        default=9200,
         help='Elasticsearch port number'
     )
     upload_parser.add_argument(
@@ -167,19 +188,23 @@ def main():
     if args.command == 'rename':
         renamer.rename_files(args.source, args.destination, args.corpus)
     elif args.command == 'thumbnail':
-        thumbnailer.create_thumbnails(args.source, args.destination)
+        thumbnailer.create_thumbnails(args.source, args.destination, force_create=args.force_create)
     elif args.command == 'optimize':
         optimizer.optimize_pdfs(
             args.source,
             args.destination,
             quality=args.quality,
-            ghostscript_path=args.ghostscript_path
+            ghostscript_path=args.ghostscript_path,
+            from_index=args.from_index,
+            to_index=args.to_index
         )
     elif args.command == 'parse':
         if args.corpus == 'dzk':
-            parser_dzk.parse(args.source, args.destination, args.from_index, args.to_index)
+            ...
+            # parser_dzk.parse(args.source, args.destination, args.from_index, args.to_index)
         elif args.corpus == 'yuparl':
-            parser_yuparl.parse(args.source, args.destination, args.from_index, args.to_index)
+            ...
+            # parser_yuparl.parse(args.source, args.destination, args.from_index, args.to_index)
         else:
             raise NotImplementedError(f"Parsing for corpus '{args.corpus}' is not implemented.")
     elif args.command == 'upload':
